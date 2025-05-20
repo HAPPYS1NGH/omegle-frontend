@@ -10,6 +10,28 @@ import {
 
 const URL = "https://omegle-backend-78um.onrender.com/";
 
+// Add ICE server configuration for NAT traversal
+const ICE_SERVERS = {
+  iceServers: [
+    {
+      urls: [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302",
+        "stun:stun2.l.google.com:19302",
+        "stun:stun3.l.google.com:19302",
+        "stun:stun4.l.google.com:19302"
+      ]
+    },
+    {
+      // Free TURN server from Twilio (you should replace with your own in production)
+      urls: "turn:global.turn.twilio.com:3478?transport=udp",
+      username: "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
+      credential: "w1uxM55V9yVoqyVFjt+KsVE6iyTjRrPg20DjIHc8fBs="
+    }
+  ],
+  iceCandidatePoolSize: 10
+};
+
 export const Room = ({
     name,
     localAudioTrack,
@@ -41,14 +63,19 @@ export const Room = ({
     onSelectVideoDevice: (deviceId: string) => void,
     onSelectAudioDevice: (deviceId: string) => void
 }) => {
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [_searchParams, _setSearchParams] = useSearchParams();
     const [lobby, setLobby] = useState(true);
     const [socket, setSocket] = useState<null | Socket>(null);
     const [sendingPc, setSendingPc] = useState<null | RTCPeerConnection>(null);
-    const [receivingPc, setReceivingPc] = useState<null | RTCPeerConnection>(null);
-    const [remoteVideoTrack, setRemoteVideoTrack] = useState<MediaStreamTrack | null>(null);
-    const [remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null);
-    const [remoteMediaStream, setRemoteMediaStream] = useState<MediaStream | null>(null);
+    const [_receivingPc, setReceivingPc] = useState<null | RTCPeerConnection>(null);
+    const [_remoteVideoTrack, setRemoteVideoTrack] = useState<MediaStreamTrack | null>(null);
+    const [_remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null);
+    const [_remoteMediaStream, setRemoteMediaStream] = useState<MediaStream | null>(null);
+    
+    // Add connection state tracking
+    const [connectionStatus, setConnectionStatus] = useState<string>("connecting");
+    const [connectionError, setConnectionError] = useState<string | null>(null);
+    
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const navigate = useNavigate();
@@ -59,11 +86,58 @@ export const Room = ({
     );
 
     useEffect(() => {
-        const socket = io(URL);
+        const socket = io(URL, {
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            timeout: 20000,
+            transports: ['websocket', 'polling']
+        });
+
+        // Add socket connection error handling
+        socket.on('connect_error', (err) => {
+            console.error('Socket connection error:', err);
+            setConnectionError(`Server connection failed: ${err.message}`);
+        });
+        
+        socket.on('connect', () => {
+            console.log('Socket connected successfully');
+            setConnectionError(null);
+        });
+
+        socket.on('disconnect', (reason) => {
+            console.log(`Socket disconnected: ${reason}`);
+            if (reason === 'io server disconnect') {
+                setConnectionError('Server disconnected');
+            }
+        });
+
         socket.on('send-offer', async ({roomId}) => {
             console.log("sending offer");
             setLobby(false);
-            const pc = new RTCPeerConnection();
+            setConnectionStatus("connecting");
+            // Use ICE server configuration
+            const pc = new RTCPeerConnection(ICE_SERVERS);
+
+            // Add connection state logging for debugging
+            pc.oniceconnectionstatechange = () => {
+                console.log(`ICE Connection State: ${pc.iceConnectionState}`);
+                
+                if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                    setConnectionStatus("connected");
+                } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                    setConnectionStatus("failed");
+                    setConnectionError("Connection to peer failed. They might be behind a strict firewall.");
+                }
+            };
+
+            pc.onconnectionstatechange = () => {
+                console.log(`Connection State: ${pc.connectionState}`);
+                if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+                    console.error("WebRTC connection failed or disconnected");
+                    setConnectionStatus("failed");
+                    setConnectionError("Connection failed. Try refreshing or use a different network.");
+                }
+            };
 
             setSendingPc(pc);
             if (localVideoTrack) {
@@ -103,7 +177,21 @@ export const Room = ({
         socket.on("offer", async ({roomId, sdp: remoteSdp}) => {
             console.log("received offer");
             setLobby(false);
-            const pc = new RTCPeerConnection();
+            // Use ICE server configuration
+            const pc = new RTCPeerConnection(ICE_SERVERS);
+            
+            // Add connection state logging for debugging
+            pc.oniceconnectionstatechange = () => {
+                console.log(`ICE Connection State: ${pc.iceConnectionState}`);
+            };
+
+            pc.onconnectionstatechange = () => {
+                console.log(`Connection State: ${pc.connectionState}`);
+                if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+                    console.error("WebRTC connection failed or disconnected");
+                }
+            };
+            
             pc.setRemoteDescription(remoteSdp)
             const sdp = await pc.createAnswer();
             //@ts-ignore
@@ -222,7 +310,7 @@ export const Room = ({
         })
 
         setSocket(socket)
-    }, [name])
+    }, [name, localAudioTrack, localVideoTrack]);
 
     useEffect(() => {
         if (localVideoRef.current) {
@@ -282,6 +370,20 @@ export const Room = ({
                     </button>
                 </div>
             </header>
+            
+            {/* Connection Status Bar - Added to show connection issues */}
+            {connectionError && (
+                <div className="bg-yellow-500 text-white text-center py-2 px-4">
+                    <p className="text-sm font-medium">{connectionError}</p>
+                    <button 
+                        onClick={() => window.location.reload()}
+                        className="text-xs underline hover:no-underline ml-2"
+                    >
+                        Refresh
+                    </button>
+                </div>
+            )}
+            
             {/* Main Content */}
             <main className="flex-1 p-4 bg-neutral-50 dark:bg-neutral-900">
                 <div className="mx-auto max-w-4xl">
@@ -294,6 +396,21 @@ export const Room = ({
                                     <div className="text-center">
                                         <div className="mb-2 text-sm text-white">Looking for someone...</div>
                                         <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-500"></div>
+                                    </div>
+                                ) : connectionStatus === "connecting" ? (
+                                    <div className="text-center">
+                                        <div className="mb-2 text-sm text-white">Connecting to stranger...</div>
+                                        <div className="mx-auto h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-500"></div>
+                                    </div>
+                                ) : connectionStatus === "failed" ? (
+                                    <div className="text-center bg-black/50 p-3 rounded">
+                                        <div className="text-sm text-white mb-2">Connection failed</div>
+                                        <button 
+                                            onClick={handleNextStranger} 
+                                            className="px-3 py-1 bg-blue-500 text-white text-sm rounded hover:bg-blue-600"
+                                        >
+                                            Try Another Person
+                                        </button>
                                     </div>
                                 ) : null}
                             </div>
