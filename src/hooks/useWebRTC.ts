@@ -1,20 +1,29 @@
 import { useState, RefObject, useRef } from "react";
 import { Socket } from "socket.io-client";
 
-// ICE server configuration for NAT traversal
+// Enhanced ICE server configuration for better NAT traversal
 const ICE_SERVERS = {
     iceServers: [
+        // Google's public STUN servers
         {
             urls: [
-                "stun:stun.l.google.com:19302",
                 "stun:stun1.l.google.com:19302",
                 "stun:stun2.l.google.com:19302",
                 "stun:stun3.l.google.com:19302",
                 "stun:stun4.l.google.com:19302",
             ],
         },
+        // Free TURN servers (you should replace these with your own in production)
         {
-            // Free TURN server from Twilio (you should replace with your own in production)
+            urls: [
+                "turn:openrelay.metered.ca:80",
+                "turn:openrelay.metered.ca:443",
+                "turn:openrelay.metered.ca:443?transport=tcp"
+            ],
+            username: "openrelayproject",
+            credential: "openrelayproject",
+        },
+        {
             urls: "turn:global.turn.twilio.com:3478?transport=udp",
             username:
                 "f4b4035eaa76f4a55de5f4351567653ee4ff6fa97b50b6b334fcc1be9c27212d",
@@ -79,11 +88,24 @@ export const useWebRTC = ({
         console.log("Creating sending peer connection");
         setConnectionStatus("connecting");
 
-        const pc = new RTCPeerConnection(ICE_SERVERS);
+        // Enhanced RTCPeerConnection configuration
+        const pc = new RTCPeerConnection({
+            ...ICE_SERVERS,
+            iceTransportPolicy: 'all',  // Try both UDP and TCP
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require',
+            // Enable all ICE candidate types
+            iceServers: ICE_SERVERS.iceServers.map(server => ({
+                ...server,
+                username: server.username || '',
+                credential: server.credential || ''
+            }))
+        });
 
         // Add connection state logging and management
         pc.oniceconnectionstatechange = () => {
             console.log(`ICE Connection State (sending): ${pc.iceConnectionState}`);
+            console.log(`Local ICE Candidates gathered so far:`, pc.localDescription?.sdp);
 
             if (
                 pc.iceConnectionState === "connected" ||
@@ -100,6 +122,11 @@ export const useWebRTC = ({
                     "Connection to peer failed. They might be behind a strict firewall."
                 );
             }
+        };
+
+        // Enhanced ICE candidate gathering
+        pc.onicegatheringstatechange = () => {
+            console.log(`ICE Gathering State: ${pc.iceGatheringState}`);
         };
 
         pc.onconnectionstatechange = () => {
@@ -170,7 +197,20 @@ export const useWebRTC = ({
         }
 
         console.log("Creating receiving peer connection");
-        const pc = new RTCPeerConnection(ICE_SERVERS);
+
+        // Enhanced RTCPeerConnection configuration
+        const pc = new RTCPeerConnection({
+            ...ICE_SERVERS,
+            iceTransportPolicy: 'all',  // Try both UDP and TCP
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require',
+            // Enable all ICE candidate types
+            iceServers: ICE_SERVERS.iceServers.map(server => ({
+                ...server,
+                username: server.username || '',
+                credential: server.credential || ''
+            }))
+        });
 
         // Set the receiving PC immediately
         setReceivingPc(pc);
