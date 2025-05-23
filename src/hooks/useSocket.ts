@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Socket, io } from "socket.io-client";
 
-const URL = "http://localhost:3000";
+const URL = "https://omegle-backend-78um.onrender.com/";
 
 interface UseSocketProps {
     name: string;
